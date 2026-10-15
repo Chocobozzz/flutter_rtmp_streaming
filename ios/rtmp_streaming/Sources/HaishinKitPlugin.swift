@@ -15,7 +15,7 @@ import AVFoundation
 public final class HaishinKitPlugin: NSObject,FlutterPlugin {
   private static let instance = HaishinKitPlugin()
   private static var sessionFactoriesRegistered = false
-  
+
   public static func register(with registrar: FlutterPluginRegistrar) {
     instance.registrar = registrar
     let channel = FlutterMethodChannel(name: "com.rtmp_streaming", binaryMessenger: registrar.messenger())
@@ -23,13 +23,13 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
     let id = Int(bitPattern: ObjectIdentifier(instance))
     print("id: \(id)")
     let eventChannel = FlutterEventChannel(name: "com.rtmp_streaming.eventchannel/\(id)", binaryMessenger: registrar.messenger())
-    
+
     eventChannel.setStreamHandler(instance)
     Task {
       await instance.ensureSessionFactoriesRegistered()
     }
   }
-  
+
   //  private var handlers: [Int: MethodCallHandler] = [:]
   //
   private(set) var mixer: MediaMixerHandler? {
@@ -84,7 +84,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
   private var enableAudio: Bool = true
   // 插件注册
   private(set) var registrar: FlutterPluginRegistrar?
-  
+
   private final class MultiEndpoint {
     let id: String
     let protocolName: String
@@ -98,7 +98,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
       self.protocolName = protocolName
     }
   }
-  
+
   private func ensureSessionFactoriesRegistered() async {
     guard !Self.sessionFactoriesRegistered else { return }
     #if canImport(RTCHaishinKit)
@@ -151,7 +151,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
     }catch{
       return FlutterError(code: "closeConnect Error", message: "catch error", details: nil)
     }
-    
+
   }
 
   private func tearDownMultiEndpoints() async {
@@ -220,6 +220,14 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
   private func publish(name: String) async{
     _ = try? await rtmpStream?.publish(name)
   }
+  // Before connect, the stream id is still 0 and the server answers on a stream the client ignores
+  private func publishOrPlay(name: String, isPlay: Bool?) async{
+    if isPlay != nil {
+      await play(url: name)
+    } else {
+      await publish(name: name)
+    }
+  }
   // play
   private func play(url: String) async{
     _ = try? await rtmpStream?.play(url)
@@ -249,7 +257,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
     }
     return cameras
   }
-  
+
   private func prepareForVideoStreaming() async -> FlutterError? {
     guard let newMixer = mixer else {
       return FlutterError(code: "prepareForVideoStreamingError", message: "mixer empty", details: nil)
@@ -294,12 +302,12 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         let textureResult = HKStreamFlutterTexture(registry: registry)
         // ✅ 关键：设置初始尺寸
         textureResult.bounds = size  // 设置合理的默认值
-        
+
         texture = textureResult
         mixer?.texture = textureResult
         await rtmpStream?.addOutput(textureResult)
         print("textureId ssss \(texture?.textureId)")
-        
+
         print("id111: \(eventId)")
         return [
           "textureId": texture?.textureId,
@@ -312,7 +320,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
       return nil
     }
   }
-  
+
   // 连接推流（RTMP / SRT / WHIP / WHEP）
   private func startVideoStreaming(
     url: String,
@@ -397,11 +405,6 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
           print("connect status: \(status.code)")
           switch status.code {
           case RTMPConnection.Code.connectSuccess.rawValue:
-            if let isPlay {
-              Task { await self.play(url: newName) }
-            } else {
-              Task { await self.publish(name: newName) }
-            }
             self.emitEvent(["eventType": "success",
                              "errorDescription": "connection success"])
           case RTMPConnection.Code.connectFailed.rawValue:
@@ -413,6 +416,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
             retries += 1
             try await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(retries)) * 1_000_000_000))
             try await newRtmpConnection.connect(newUrl)
+            await self.publishOrPlay(name: newName, isPlay: isPlay)
             self.emitEvent(["eventType": "rtmp_retry",
                              "errorDescription": "connection failed " + status.code])
           case RTMPConnection.Code.connectClosed.rawValue:
@@ -434,8 +438,9 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         expectedFrameRate: nil,
         bitRateMode: nil
       )
-      
+
       try await newRtmpConnection.connect(newUrl)
+      await publishOrPlay(name: newName, isPlay: isPlay)
       return nil
     } catch {
       emitEvent(["eventType" : "rtmp_stopped",
@@ -785,10 +790,10 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
   }
   //开启闪光灯 只有后摄像头有
   private func onFlashLight() -> FlutterError? {
-    
+
     do {
       guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back), device.hasTorch else {
-        
+
         return FlutterError(code: "onFlashLight", message: "device error", details: nil)
       }
       try device.lockForConfiguration()
@@ -801,7 +806,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
   }
   //关闭闪光灯 只有后摄像头有
   private func offFlashLight() -> FlutterError? {
-    
+
     do {
       guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back), device.hasTorch else { return FlutterError(code: "offFlashLight", message: "device error", details: nil) }
       try device.lockForConfiguration()
@@ -815,22 +820,22 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
     guard let texture = texture else {
       return FlutterError(code: "takePictureError", message: "Texture not initialized", details: nil)
     }
-    
+
     guard let image = texture.getCurrentImage() else {
       return FlutterError(code: "takePictureError", message: "Failed to capture image", details: nil)
     }
-    
+
     guard let imageData = image.jpegData(compressionQuality: 1.0) else {
       return FlutterError(code: "takePictureError", message: "Failed to convert image to JPEG", details: nil)
     }
-    
+
     do {
       let url = URL(fileURLWithPath: filePath)
       let directory = url.deletingLastPathComponent()
-      
+
       // 确保目录存在
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: nil)
-      
+
       // 保存图片
       try imageData.write(to: url)
       return nil
@@ -838,7 +843,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
       return FlutterError(code: "IOError", message: "Failed saving image: \(error.localizedDescription)", details: nil)
     }
   }
-  
+
   //获取直播流信息
   private func getStreamStatistics() async -> [String: Any?] {
     do {
@@ -1096,7 +1101,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         ))
       }
     case "initialize":
-      
+
       do{
         guard
           let arguments = call.arguments as? [String: Any?],
@@ -1110,10 +1115,10 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
           print("enableAudio \(enableAudio)")
           print("resolution \(resolution)")
           //        print("cameraId \(arguments["cameraId"] as? String)")
-          
+
           let res = await initialize(cameraId: cameraId, enableAudio: enableAudio, resolution: resolution)
           result(res)   // 返回给 Flutter
-          
+
         }
       }catch{
         result(FlutterError(
@@ -1122,7 +1127,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
           details: nil
         ))
       }
-      
+
     case "prepareForVideoStreaming":
       Task {
         let res = await prepareForVideoStreaming()
@@ -1135,7 +1140,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         result(FlutterError(code: "takePictureError", message: "Must specify a filePath.", details: nil))
         return
       }
-      
+
       let fileManager = FileManager.default
       if fileManager.fileExists(atPath: filePath) {
         result(FlutterError(
@@ -1145,7 +1150,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         ))
         return
       }
-      
+
       Task {
         let error = await takePicture(filePath: filePath)
         result(error)
@@ -1239,7 +1244,7 @@ public final class HaishinKitPlugin: NSObject,FlutterPlugin {
         )
         result(res)
       }
-      
+
     case "stopStreaming":
       //停止直播
       Task{
@@ -1726,7 +1731,7 @@ extension HaishinKitPlugin: FlutterStreamHandler {
     self.eventSink = events
     return nil
   }
-  
+
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
     return nil
   }
